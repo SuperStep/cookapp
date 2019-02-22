@@ -1,7 +1,13 @@
+from os.path import exists
+import os
+from google.cloud import translate
+
 from sqlalchemy.orm import sessionmaker, Query
 from sqlalchemy import create_engine, text
 from references import Ingredient, Recipie, RecipieIngredients
+import pickle
 
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"]="/home/egor_darya/googletrans.json"
 
 class Connection():
     Session = sessionmaker()
@@ -51,7 +57,16 @@ class Connection():
 
 class Data():
 
-    def get_ingredients(self):
+    cache = {}
+
+    def ingredients_fn(self):
+        return 'ingredients.pickle'
+
+    def get_ingredients(self, translate = False):
+
+        if exists(self.ingredients_fn()):
+           return pickle.load(open(self.ingredients_fn(), "rb" ))
+
         conn = Connection()
         ingredient_list = conn.get_ingredients()
 
@@ -65,4 +80,30 @@ class Data():
                                 'food_subgroup': ing.food_subgroup,
                                 'description': '' if ing.description == None else ing.description})
 
+        if translate:
+            ingredients = list(map(lambda x: self.Translate(x), ingredients))
+
+        pickle.dump(ingredients, open(self.ingredients_fn(), "wb"))
         return ingredients
+
+    def Translate(self, ingredient, lang = 'ru'):
+        translate_client = translate.Client()
+        translates = ['name','food_group','food_subgroup']
+        for property in translates:
+            if ingredient[property] == '':
+                continue
+            suggesstion = self.cache.get(ingredient[property])
+            if suggesstion == None:
+                try:
+                    translation = translate_client.translate(ingredient[property],
+                                                             target_language=lang,
+                                                             source_language='en')
+                    ingredient[property] = translation['translatedText']
+                except Exception:
+                    print('error translate {0}', ingredient[property])
+            else:
+                ingredient[property] = suggesstion
+
+
+        print(ingredient)
+        return ingredient

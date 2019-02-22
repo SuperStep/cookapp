@@ -4,19 +4,42 @@ import json
 
 from os.path import exists
 from kivy.app import App
+from kivy.lang import Builder
+
 import datetime
 import time
 
+from kivy.metrics import dp
 from kivy.properties import ListProperty, StringProperty, \
     NumericProperty, BooleanProperty, AliasProperty, ObjectProperty
 from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
 from kivy.uix.popup import Popup
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.treeview import TreeView, TreeViewNode, TreeViewLabel
-from kivy.uix.screenmanager import ScreenManager, Screen, SlideTransition
+from kivy.uix.screenmanager import ScreenManager, Screen, SwapTransition, SlideTransition
+from kivy.uix.image import Image
 from kivy.clock import Clock
 
+from kivymd.bottomsheet import MDListBottomSheet, MDGridBottomSheet
+from kivymd.button import MDIconButton
+from kivymd.date_picker import MDDatePicker
+from kivymd.dialog import MDDialog
+from kivymd.label import MDLabel
+from kivymd.list import ILeftBody, ILeftBodyTouch, IRightBodyTouch, BaseListItem
+from kivymd.material_resources import DEVICE_TYPE
+from kivymd.navigationdrawer import MDNavigationDrawer, NavigationDrawerHeaderBase
+from kivymd.selectioncontrols import MDCheckbox
+from kivymd.snackbar import Snackbar
+from kivymd.theming import ThemeManager
+from kivymd.time_picker import MDTimePicker
+from kivymd.list import TwoLineAvatarListItem, TwoLineListItem
+from kivymd.toolbar import Toolbar
+from kivymd.navigationdrawer import NavigationLayout, MDNavigationDrawer, \
+    NavigationDrawerToolbar, NavigationDrawerIconButton
+
 from database import Data
+
 
 class Recipies(Screen):
     data = ListProperty()
@@ -48,10 +71,11 @@ class RecipieView(Screen):
         self.prop_last_cooked = int(time.mktime(datetime.datetime.now().timetuple()))
 
     def add_ingredient(self):
-        ingredient_list = IngredientListPopup()
-        ingredient_list.set_parent(self)
-        ingredient_list.load_ingredients()
-        ingredient_list.open()
+        dialog = IngredientListMDDialog(title="Choose ingredients",
+                                        size_hint=(.8, .9),
+                                        auto_dismiss=False)
+        dialog.callerObject = self
+        dialog.open()
 
     def append_ingredient(self, ingredient):
         self.prop_ingredients.append({'index': len(self.ingredients_data), 'name': ingredient})
@@ -76,7 +100,7 @@ class RecipieView(Screen):
         ).strftime('%Y-%m-%d %H:%M:%S')
 
 
-class RecipieListItem(BoxLayout):
+class RecipieListItem(TwoLineAvatarListItem):
     prop_id = NumericProperty()
     prop_name = StringProperty()
 
@@ -116,7 +140,7 @@ class MutableTextInput(FloatLayout):
             self.view()
 
 
-class IngredientListItem(BoxLayout):
+class IngredientListItem(TwoLineListItem):
     prop_recipie = None
     prop_index = NumericProperty()
     prop_name = StringProperty()
@@ -132,19 +156,17 @@ class IngredientsTree():
     @classmethod
     def build(cls):
 
-        #if exists(cls.pickle_fn()):
-        #   result = pickle.load(open(cls.pickle_fn(), "rb" ) )
-
         tv = TreeView(hide_root=True)
         tv.size_hint = 1, None
         tv.bind(minimum_height=tv.setter('height'))
 
         data = Data()
 
-        ingredients = data.get_ingredients()
+        ingredients = data.get_ingredients(True)
+
 
         node_subgroup = None
-        for ingredient in ingredients[::-1]:
+        for ingredient in ingredients[::-1][:10]:
             if ingredient['food_subgroup'] == None\
                     and ingredient['food_group'] != None:
                 node_group = tv.add_node(TreeViewLabel(text=ingredient['food_group']))
@@ -155,16 +177,14 @@ class IngredientsTree():
             elif node_subgroup != None\
                     and ingredient['id'] != None:
                 tv.add_node(IngredientListPopupItem(
+                    is_folder = False,
                     prop_id=ingredient['id'],
                     name=ingredient['name'],
                     name_scientific=ingredient['name_scientific'],
                     description=ingredient['description']),
                     node_subgroup)
 
-
         cls.tv = tv
-
-        #pickle.dump(tv, open(cls.pickle_fn(), "wb"))
 
     @classmethod
     def get_tree(cls):
@@ -175,25 +195,20 @@ class IngredientsTree():
         return 'ingredient_tree.pickle'
 
 
-class IngredientListPopup(Popup):
-    data = ListProperty()
-    categories = ListProperty()
-    parentView = None
-    ingredientsPopup:BoxLayout = None
-    currentTreeView:TreeView = None
+class IngredientListMDDialog(MDDialog):
+    callerObject = None
+    currentTreeView = None
 
-    def set_parent(self, parentView):
-        self.parentView = parentView
-
-    def load_ingredients(self):
-        self.ingredientsPopup = self.ids['ingredientsPopup']
-        self.ingredientsPopup.add_widget(IngredientsTree().tv)
+    def __init__(self, **kwargs):
+        super(IngredientListMDDialog, self).__init__(**kwargs)
+        self.add_action_button("Ok", action=lambda *x: self.close())
+        self.add_action_button("Close", action=lambda *x: self.close())
+        self.add_widget(IngredientsTree().tv)
         self.currentTreeView = IngredientsTree().tv
 
     def close(self):
         if self.currentTreeView._selected_node != None:
-            self.parentView.append_ingredient(self.currentTreeView._selected_node.name)
-        self.ingredientsPopup.remove_widget(self.currentTreeView)
+            self.callerObject.append_ingredient(self.currentTreeView._selected_node.name)
         self.dismiss()
 
 
@@ -202,13 +217,14 @@ class IngredientListPopupItem(BoxLayout, TreeViewNode):
     name = StringProperty()
     name_scientific = StringProperty()
     description = StringProperty()
+    is_folder = BooleanProperty()
 
     def show_info(self):
         content = IngredientInfo(
             prop_id = self.prop_id,
             name=self.name,
             name_scientific=self.name_scientific,
-            description=self.description,
+            description=self.description
         )
         infoPopup = Popup(content = content, title = self.name)
         infoPopup.open()
@@ -221,22 +237,73 @@ class IngredientInfo(BoxLayout):
     description = StringProperty()
 
     def close(self):
-        self.dismiss()
+        self.parent.dismiss()
+
+
+class ProgressScreen(Screen):
+    pass
 
 
 class RecipieApp(App):
 
+    theme_cls = ThemeManager()
+
+
+    menu_items = [
+        {'viewclass': 'MDMenuItem',
+         'text': 'Example item'},
+        {'viewclass': 'MDMenuItem',
+         'text': 'Example item'},
+        {'viewclass': 'MDMenuItem',
+         'text': 'Example item'},
+        {'viewclass': 'MDMenuItem',
+         'text': 'Example item'},
+        {'viewclass': 'MDMenuItem',
+         'text': 'Example item'},
+        {'viewclass': 'MDMenuItem',
+         'text': 'Example item'},
+        {'viewclass': 'MDMenuItem',
+         'text': 'Example item'},
+    ]
     def build(self):
-        self.kv_file = 'recipie.kv'
-        self.filter = False
+
+        main_widget = Builder.load_file('recipie.kv')
+        self.screen_manager:ScreenManager = main_widget.ids.scr_mngr
+        #self.theme_cls.theme_style = 'Dark'
+
+        #self.kv_file = 'recipie2.kv'
+        #self.filter = False
+        self.loading = ProgressScreen(name='loading')
         self.recipies = Recipies(name='recipies')
         self.current_recipie = None
-        self.load_recipies()
-        self.transition = SlideTransition(duration=.35)
-        root = ScreenManager(transition=self.transition)
-        root.add_widget(self.recipies)
+        #self.load_recipies()
+        #self.transition = SlideTransition(duration=.35)
+        #root = ScreenManager(transition=self.transition)
+        #root.add_widget(self.recipies)
+        #IngredientsTree().build()
+        self.screen_manager.add_widget(self.recipies)
+        self.screen_manager.add_widget(self.loading)
+        self.screen_manager.transition = SlideTransition()
+        self.screen_manager.transition.direction = 'left'
+        self.screen_manager.current = 'recipies'
+        return main_widget
+
+    def on_start(self):
         IngredientsTree().build()
-        return root
+        #self.screen_manager.current = 'recipies'
+
+    def bottom_navigation_remove_mobile(self, widget):
+        # Removes some items from bottom-navigation demo when on mobile
+        if DEVICE_TYPE == 'mobile':
+            widget.ids.bottom_navigation_demo.remove_widget(widget.ids.bottom_navigation_desktop_2)
+        if DEVICE_TYPE == 'mobile' or DEVICE_TYPE == 'tablet':
+            widget.ids.bottom_navigation_demo.remove_widget(widget.ids.bottom_navigation_desktop_1)
+
+    def set_error_message(self, *args):
+        if len(self.root.ids.text_field_error.text) == 2:
+            self.root.ids.text_field_error.error = True
+        else:
+            self.root.ids.text_field_error.error = False
 
     def load_recipies(self):
         if not exists(self.recipie_fn):
@@ -258,9 +325,10 @@ class RecipieApp(App):
     def edit_recipie(self, index):
         self.recipie = self.recipies.data[index]
         name = 'recipie{}'.format(index)
+        self.screen_manager.transition.direction = 'left'
 
-        if self.root.has_screen(name):
-            self.root.remove_widget(self.root.get_screen(name))
+        if self.screen_manager.has_screen(name):
+            self.screen_manager.remove_widget(self.screen_manager.get_screen(name))
 
         view = RecipieView(
             name = name,
@@ -271,25 +339,25 @@ class RecipieApp(App):
             prop_last_cooked=self.recipie['last_cooked']
         )
 
-        self.root.add_widget(view)
-        self.transition.direction = 'left'
+        self.screen_manager.add_widget(view)
+        self.screen_manager.current = name
         self.root.current = view.name
 
     def add_recipie(self):
         self.recipies.data.append({'name': 'New recipie',
                                    'description': 'Description',
-                                   'date': '0',
+                                   'last_cooked': '0',
                                    'ingredients': []})
         rec_index = len(self.recipies.data) - 1
         self.edit_recipie(rec_index)
 
     def set_recipie_description(self, id, description):
-        self.recipies.data[id].description = description
+        self.recipies.data[id]['description'] = description
         self.save_recipies()
         self.refresh_recipies()
 
     def set_recipie_title(self, id, name):
-        self.recipies.data[id].name = name
+        self.recipies.data[id]['name'] = name
         self.save_recipies()
         self.refresh_recipies()
 
@@ -315,14 +383,16 @@ class RecipieApp(App):
 
         element.text = self.recipies.FilterText()
 
-    def go_recipies(self, recipie):
-        edited_recipie = self.recipies.data[recipie.prop_id]
-        edited_recipie['name'] = recipie.prop_name
-        edited_recipie['description'] = recipie.prop_description
-        edited_recipie['last_cooked'] = recipie.prop_last_cooked
-        edited_recipie['ingredients'] = recipie.prop_ingredients
-        self.transition.direction = 'right'
-        self.root.current = 'recipies'
+    def go_recipies(self, recipie = None):
+        if recipie != None:
+            edited_recipie = self.recipies.data[recipie.prop_id]
+            edited_recipie['name'] = recipie.prop_name
+            edited_recipie['description'] = recipie.prop_description
+            edited_recipie['last_cooked'] = recipie.prop_last_cooked
+            edited_recipie['ingredients'] = recipie.prop_ingredients
+        self.screen_manager.transition = SlideTransition()
+        self.screen_manager.transition.direction = 'right'
+        self.screen_manager.current = 'recipies'
         self.save_recipies()
         self.refresh_recipies()
 
@@ -331,6 +401,18 @@ class RecipieApp(App):
         # return join(self.user_data_dir, 'recipie.json')
         return 'recipie.json'
 
+
+class AvatarSampleWidget(ILeftBody, Image):
+    pass
+
+
+class IconLeftSampleWidget(ILeftBodyTouch, MDIconButton):
+    pass
+
+
+class IconRightSampleWidget(IRightBodyTouch, MDIconButton):
+    #icon = StringProperty('delete')
+    pass
 
 if __name__ == '__main__':
     RecipieApp().run()
